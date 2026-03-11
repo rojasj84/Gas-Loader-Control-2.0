@@ -209,38 +209,67 @@ class FlowDiagram(tk.Canvas):
         self.update_flow()
 
     def _create_valve_images(self):
-        """Generates transparent PNG-style images in memory using Pillow."""
-        size = 64
+        """Generates more modern, visually appealing valve images in memory using Pillow."""
+        # Target size for the UI
+        target_size = 64
+
+        # Super-sampling setup (Draw 4x larger, then resize down)
+        scale = 4
+        size = target_size * scale
         center = size // 2
-        radius = 24
-        
-        def create_base():
+        radius = 24 * scale
+
+        # Colors for the new design
+        VALVE_BODY_COLOR = "#B0BEC5"  # Blue Grey
+        VALVE_BORDER_COLOR = "#546E7A" # Darker Blue Grey
+        OPEN_INDICATOR_COLOR = "#66BB6A" # Green
+        CLOSED_INDICATOR_COLOR = "#EF5350" # Red
+
+        def create_valve_icon(state: str):
             img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
             draw = ImageDraw.Draw(img)
-            # Draw Circle (White fill, Black outline)
+
+            # Draw valve body (circle)
             draw.ellipse(
                 [center - radius, center - radius, center + radius, center + radius],
-                fill="white", outline="black", width=3
+                fill=VALVE_BODY_COLOR, outline=VALVE_BORDER_COLOR, width=3 * scale
             )
-            return img, draw
+
+            # Draw state indicator (a rotating bar)
+            indicator_width = 18 * scale
+            indicator_height = 6 * scale
+            corner_rad = 3 * scale
+
+            if state == 'open':
+                # Horizontal bar for OPEN
+                draw.rounded_rectangle(
+                    [center - indicator_width, center - indicator_height,
+                     center + indicator_width, center + indicator_height],
+                    radius=corner_rad, fill=OPEN_INDICATOR_COLOR, outline="black", width=1 * scale
+                )
+            else: # 'closed'
+                # Vertical bar for CLOSED
+                draw.rounded_rectangle(
+                    [center - indicator_height, center - indicator_width,
+                     center + indicator_height, center + indicator_width],
+                    radius=corner_rad, fill=CLOSED_INDICATOR_COLOR, outline="black", width=1 * scale
+                )
+
+            # Resize with LANCZOS for high-quality anti-aliasing
+            # Check for Resampling enum (Pillow >= 9.1.0) or fallback to module constant
+            if hasattr(Image, "Resampling"):
+                resample_mode = Image.Resampling.LANCZOS
+            else:
+                resample_mode = Image.LANCZOS
+            
+            return img.resize((target_size, target_size), resample_mode)
 
         # 1. Closed Image (Red X)
-        self.img_closed_pil, draw_c = create_base()
-        d = 12
-        draw_c.line([center - d, center - d, center + d, center + d], fill="red", width=4)
-        draw_c.line([center - d, center + d, center + d, center - d], fill="red", width=4)
+        self.img_closed_pil = create_valve_icon(state='closed')
         self.tk_img_closed = ImageTk.PhotoImage(self.img_closed_pil)
 
         # 2. Open Image (Black Arrow <->)
-        self.img_open_pil, draw_o = create_base()
-        d_arr = 15
-        draw_o.line([center - d_arr, center, center + d_arr, center], fill="black", width=3)
-        # Arrow heads
-        h = 5
-        draw_o.line([center - d_arr, center, center - d_arr + h, center - h], fill="black", width=3)
-        draw_o.line([center - d_arr, center, center - d_arr + h, center + h], fill="black", width=3)
-        draw_o.line([center + d_arr, center, center + d_arr - h, center - h], fill="black", width=3)
-        draw_o.line([center + d_arr, center, center + d_arr - h, center + h], fill="black", width=3)
+        self.img_open_pil = create_valve_icon(state='open')
         self.tk_img_open = ImageTk.PhotoImage(self.img_open_pil)
 
     def draw_layout(self):
