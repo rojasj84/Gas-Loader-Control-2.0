@@ -62,7 +62,6 @@ class DeviceControlWidget(ttk.Frame):
     def __init__(self, parent, device: ControllableDevice):
         super().__init__(parent)
         self.device = device
-        self.tk_is_on_var = tk.BooleanVar(value=False)
 
         # UI Setup
         self._setup_ui()
@@ -78,29 +77,21 @@ class DeviceControlWidget(ttk.Frame):
         lbl_info = ttk.Label(self, text=self.device.name, width=25, anchor="w")
         lbl_info.pack(side="left", padx=10)
 
-        # 2. Control Checkbox
-        self.chk_control = ttk.Checkbutton(
-            self,
-            text="Turn ON",
-            variable=self.tk_is_on_var,
-            command=self._on_toggle
-        )
-        self.chk_control.pack(side="left", padx=20)
-
-        # 3. Status Indicator
+        # 2. Status Indicator / Button
         self.lbl_status = tk.Label(
             self,
             text="STATUS",
             width=12,
             font=("Arial", 10, "bold"),
-            relief="sunken",
-            borderwidth=2
+            relief="raised",
+            borderwidth=2,
+            cursor="hand2"
         )
         self.lbl_status.pack(side="right", padx=10)
+        self.lbl_status.bind("<Button-1>", lambda e: self._on_toggle())
 
     def _on_toggle(self):
-        is_checked = self.tk_is_on_var.get()
-        self.device.is_on = is_checked
+        self.device.is_on = not self.device.is_on
         self._update_status_display()
 
     def _update_status_display(self):
@@ -120,7 +111,6 @@ class ValveControlWidget(ttk.Frame):
         super().__init__(parent)
         self.valve = valve
         self.on_update = on_update
-        self.tk_energize_var = tk.BooleanVar(value=False)
         
         # UI Setup
         self._setup_ui()
@@ -137,31 +127,22 @@ class ValveControlWidget(ttk.Frame):
         lbl_info = ttk.Label(self, text=info_text, width=22, anchor="w")
         lbl_info.pack(side="left", padx=5)
 
-        # 2. Control Checkbox (Controls the solenoid/coil)
-        # We use command=self._on_toggle to update logic immediately
-        self.chk_control = ttk.Checkbutton(
-            self, 
-            text="Energize", 
-            variable=self.tk_energize_var,
-            command=self._on_toggle
-        )
-        self.chk_control.pack(side="left", padx=5)
-
-        # 3. Status Indicator (Visual Feedback of flow)
+        # 2. Status Indicator / Button
         self.lbl_status = tk.Label(
             self, 
             text="STS", 
-            width=8, 
+            width=12, 
             font=("Arial", 9, "bold"),
-            relief="sunken",
-            borderwidth=1
+            relief="raised",
+            borderwidth=2,
+            cursor="hand2"
         )
         self.lbl_status.pack(side="right", padx=5)
+        self.lbl_status.bind("<Button-1>", lambda e: self._on_toggle())
 
     def _on_toggle(self):
         # Update the model object
-        is_checked = self.tk_energize_var.get()
-        self.valve.is_energized = is_checked
+        self.valve.is_energized = not self.valve.is_energized
         
         # Update the visual display
         self._update_status_display()
@@ -181,9 +162,8 @@ class ValveControlWidget(ttk.Frame):
 
     def refresh_from_model(self):
         """
-        Updates the checkbox state to match the model (used when model changes externally).
+        Updates the status display to match the model (used when model changes externally).
         """
-        self.tk_energize_var.set(self.valve.is_energized)
         self._update_status_display()
 
 class PressureGauge(tk.Canvas):
@@ -191,7 +171,7 @@ class PressureGauge(tk.Canvas):
     A visual pressure gauge widget using Pillow for high-quality super-sampled rendering.
     """
     def __init__(self, parent, min_val, max_val, title, size=160, **kwargs):
-        super().__init__(parent, width=size, height=size, bg="white", highlightthickness=0, **kwargs)
+        super().__init__(parent, width=size, height=size, bg="#2b2b2b", highlightthickness=0, **kwargs)
         self.min_val = min_val
         self.max_val = max_val
         self.title_text = title
@@ -207,8 +187,8 @@ class PressureGauge(tk.Canvas):
         self.img_item = self.create_image(0, 0, anchor="nw")
         
         # Overlay Text (Crisper when drawn natively by Tkinter on top)
-        self.create_text(self.cx, self.cy + 30, text=self.title_text, font=("Helvetica", 9, "bold"), fill="#555")
-        self.text_val = self.create_text(self.cx, self.cy + 50, text=str(min_val), font=("Helvetica", 16, "bold"), fill="black")
+        self.create_text(self.cx, self.cy + 30, text=self.title_text, font=("Helvetica", 9, "bold"), fill="#b0b0b0")
+        self.text_val = self.create_text(self.cx, self.cy + 50, text=str(min_val), font=("Helvetica", 16, "bold"), fill="white")
         
         self.set_value(min_val)
 
@@ -220,9 +200,9 @@ class PressureGauge(tk.Canvas):
         img = Image.new("RGBA", (s_size, s_size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
         
-        # 1. White Face with Black Border
+        # 1. Dark Face with Light Border
         margin = 2 * scale
-        draw.ellipse([margin, margin, s_size-margin, s_size-margin], fill="white", outline="black", width=3*scale)
+        draw.ellipse([margin, margin, s_size-margin, s_size-margin], fill="#383838", outline="#90A4AE", width=3*scale)
         
         # 2. Colored Arcs (PIL angles: 0 is 3 o'clock, clockwise)
         # We map the 270 deg span: SW (135 deg) to SE (405 deg)
@@ -265,10 +245,10 @@ class PressureGauge(tk.Canvas):
         tip_y = cy - tip_r * math.sin(angle_rad) # Canvas Y is inverted relative to standard math
         
         # Draw Needle
-        draw.line([cx, cy, tip_x, tip_y], fill="black", width=4*scale)
+        draw.line([cx, cy, tip_x, tip_y], fill="white", width=4*scale)
         # Hub
         hub_r = 6 * scale
-        draw.ellipse([cx-hub_r, cy-hub_r, cx+hub_r, cy+hub_r], fill="black")
+        draw.ellipse([cx-hub_r, cy-hub_r, cx+hub_r, cy+hub_r], fill="white")
         
         # Resize with LANCZOS for quality
         if hasattr(Image, "Resampling"):
@@ -286,7 +266,7 @@ class FlowDiagram(tk.Canvas):
     Red = No Flow
     """
     def __init__(self, parent, valves, on_valve_click=None):
-        super().__init__(parent, bg="white", width=950, height=720, highlightthickness=0)
+        super().__init__(parent, bg="#2b2b2b", width=950, height=720, highlightthickness=0)
         self.valves = valves  # List of 6 PneumaticValve objects
         self.on_valve_click = on_valve_click
         self.valve_positions = [] # Store coordinates for updates
@@ -322,7 +302,7 @@ class FlowDiagram(tk.Canvas):
 
         # Colors for the new design
         VALVE_BODY_COLOR = "#B0BEC5"  # Blue Grey
-        VALVE_BORDER_COLOR = "black"   # Black border
+        VALVE_BORDER_COLOR = "white"   # White border for Dark Mode
         OPEN_INDICATOR_COLOR = "#66BB6A" # Green
         CLOSED_INDICATOR_COLOR = "#EF5350" # Red
 
@@ -433,7 +413,7 @@ class FlowDiagram(tk.Canvas):
         # 4. Central Crankcase/Motor (drawn on top of housing edges)
         draw.rectangle(
             [center_x, center_y, center_x + center_w, center_y + center_h],
-            fill=COLOR_DARK_BLUE, outline="black", width=2*scale
+            fill=COLOR_DARK_BLUE, outline="white", width=2*scale
         )
 
         # 5. Top Overhead Pipe (Cooler/Bypass)
@@ -456,9 +436,9 @@ class FlowDiagram(tk.Canvas):
         self.delete("all")
         
         # Scaling factors
-        SCALE = 1.6
-        X_OFF = 50
-        Y_OFF = 50
+        SCALE = 1.2
+        X_OFF = 220
+        Y_OFF = 100
         
         # Define Coordinates for nodes (Scaled up)
         start       = (X_OFF + 50*SCALE,  Y_OFF + 200*SCALE)
@@ -499,13 +479,13 @@ class FlowDiagram(tk.Canvas):
         line_opts = {'width': PIPE_W, 'capstyle': tk.ROUND, 'joinstyle': tk.ROUND}
 
         # --- Draw Text Labels ---
-        self.create_text(start[0], start[1]-30, text="Gas Bottle IN", font=FONT_LBL)
-        self.create_text(chamber_pos[0], chamber_pos[1]-30, text="Loading\nChamber", font=FONT_LBL, justify="center")
-        self.create_text(bottle_pos[0], bottle_pos[1]+40, text="Lecture\nBottle", font=FONT_LBL, justify="center")
+        self.create_text(start[0], start[1]-30, text="Gas Bottle IN", font=FONT_LBL, fill="white")
+        self.create_text(chamber_pos[0], chamber_pos[1]-30, text="Loading\nChamber", font=FONT_LBL, justify="center", fill="white")
+        self.create_text(bottle_pos[0], bottle_pos[1]+40, text="Lecture\nBottle", font=FONT_LBL, justify="center", fill="white")
         # Moved labels down (+65) to accommodate the new compressor image
-        self.create_text(comp_pos[0], comp_pos[1]+65, text="Compressor\nIN", font=FONT_LBL, justify="center")
-        self.create_text(comp_out_pos[0], comp_out_pos[1]+65, text="Compressor\nOUT", font=FONT_LBL, justify="center")
-        self.create_text(exhaust_pos[0], exhaust_pos[1]+30, text="Exhaust", font=FONT_LBL)
+        self.create_text(comp_pos[0], comp_pos[1]+65, text="Compressor\nIN", font=FONT_LBL, justify="center", fill="white")
+        self.create_text(comp_out_pos[0], comp_out_pos[1]+65, text="Compressor\nOUT", font=FONT_LBL, justify="center", fill="white")
+        self.create_text(exhaust_pos[0], exhaust_pos[1]+30, text="Exhaust", font=FONT_LBL, fill="white")
 
         # --- Draw Pipes (Grouped by Nodes) ---
         # Node 0: Inlet
@@ -543,9 +523,9 @@ class FlowDiagram(tk.Canvas):
         self.create_image(comp_mid_x, comp_pos[1], image=self.tk_img_comp, tags="compressor")
         
         # --- Place Gauges (Window Objects) ---
-        self.create_window(start[0] - 80, start[1], window=self.gauge_inlet, anchor="e")
-        self.create_window(chamber_pos[0], chamber_pos[1] - 100, window=self.gauge_chamber, anchor="s")
-        self.create_window(bottle_pos[0], bottle_pos[1] + 90, window=self.gauge_bottle, anchor="n")
+        self.create_window(start[0] - 60, start[1], window=self.gauge_inlet, anchor="e")
+        self.create_window(chamber_pos[0] + 160, chamber_pos[1] + 20, window=self.gauge_chamber, anchor="w")
+        self.create_window(bottle_pos[0] + 160, bottle_pos[1] - 20, window=self.gauge_bottle, anchor="w")
 
         # --- Draw Valves (Overlay) ---
         valve_coords = [
@@ -563,7 +543,7 @@ class FlowDiagram(tk.Canvas):
             
             # Draw Valve Image (Starts Closed)
             self.create_image(x, y, image=self.tk_img_closed, tags=(tag_id, img_tag))
-            self.create_text(x, y-38, text=name, font=FONT_VALVE, tags=tag_id)
+            self.create_text(x, y-38, text=name, font=FONT_VALVE, tags=tag_id, fill="white")
             
             # Bind click event
             self.tag_bind(tag_id, "<Button-1>", lambda event, idx=i: self._on_valve_click_handler(idx))
@@ -605,9 +585,50 @@ class GasLoadingApp(tk.Tk):
         self.title("Gas Loading System Control")
         self.geometry("1600x900")
         
-        # Main Title
-        header = ttk.Label(self, text="Gas Loading System Control", font=("Helvetica", 16, "bold"))
-        header.pack(pady=15)
+        # --- Dark Mode Theme Setup ---
+        BG_COLOR = "#2b2b2b"
+        FG_COLOR = "white"
+        
+        self.configure(bg=BG_COLOR)
+        
+        style = ttk.Style(self)
+        style.theme_use('clam') # 'clam' theme allows for easier color customization
+        
+        style.configure("TFrame", background=BG_COLOR)
+        style.configure("TLabel", background=BG_COLOR, foreground=FG_COLOR)
+        style.configure("TCheckbutton", background=BG_COLOR, foreground=FG_COLOR, indicatorcolor=BG_COLOR, activebackground=BG_COLOR, activeforeground=FG_COLOR)
+        style.configure("TButton", background=BG_COLOR, foreground=FG_COLOR)
+        
+        # --- Header Section ---
+        header_frame = ttk.Frame(self)
+        header_frame.pack(side="top", fill="x", padx=20, pady=15)
+        
+        # 1. Logo (Top Left)
+        try:
+            logo_path = "/home/javierrojas/Programming/Gas Loader Control 2.0/Logo_CarnegieScience_primary_white_RGB.png"
+            pil_img = Image.open(logo_path)
+            
+            # Resize with Super Sampling (LANCZOS)
+            target_h = 120
+            aspect_ratio = pil_img.width / pil_img.height
+            target_w = int(target_h * aspect_ratio)
+            
+            if hasattr(Image, "Resampling"):
+                resample_mode = Image.Resampling.LANCZOS
+            else:
+                resample_mode = Image.LANCZOS
+                
+            pil_img = pil_img.resize((target_w, target_h), resample_mode)
+            self.tk_logo_img = ImageTk.PhotoImage(pil_img)
+            
+            lbl_logo = ttk.Label(header_frame, image=self.tk_logo_img)
+            lbl_logo.pack(side="left")
+        except Exception as e:
+            print(f"Error loading logo: {e}")
+
+        # 2. Main Title (Right of the logo)
+        lbl_title = ttk.Label(header_frame, text="Gas Loading System Control", font=("Helvetica", 22, "bold"))
+        lbl_title.pack(side="left", padx=15)
 
         # Create Main Layout (Left: Controls, Right: Diagram)
         main_frame = ttk.Frame(self)
