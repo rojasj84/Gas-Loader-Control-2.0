@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk
 from PIL import Image, ImageDraw, ImageTk
+import math
 
 # Constants for Valve Types
 TYPE_NORMALLY_OPEN = "Normally Open"
@@ -129,33 +130,33 @@ class ValveControlWidget(ttk.Frame):
 
     def _setup_ui(self):
         # Frame border for visual separation
-        self.config(relief="groove", padding=10, borderwidth=1)
+        self.config(relief="groove", padding=2, borderwidth=1)
         
         # 1. Valve Name & Type Label
-        info_text = f"{self.valve.name}\n({self.valve.valve_type})"
-        lbl_info = ttk.Label(self, text=info_text, width=25, anchor="w")
-        lbl_info.pack(side="left", padx=10)
+        info_text = f"{self.valve.name}"
+        lbl_info = ttk.Label(self, text=info_text, width=22, anchor="w")
+        lbl_info.pack(side="left", padx=5)
 
         # 2. Control Checkbox (Controls the solenoid/coil)
         # We use command=self._on_toggle to update logic immediately
         self.chk_control = ttk.Checkbutton(
             self, 
-            text="Energize Solenoid", 
+            text="Energize", 
             variable=self.tk_energize_var,
             command=self._on_toggle
         )
-        self.chk_control.pack(side="left", padx=20)
+        self.chk_control.pack(side="left", padx=5)
 
         # 3. Status Indicator (Visual Feedback of flow)
         self.lbl_status = tk.Label(
             self, 
-            text="STATUS", 
-            width=12, 
-            font=("Arial", 10, "bold"),
+            text="STS", 
+            width=8, 
+            font=("Arial", 9, "bold"),
             relief="sunken",
-            borderwidth=2
+            borderwidth=1
         )
-        self.lbl_status.pack(side="right", padx=10)
+        self.lbl_status.pack(side="right", padx=5)
 
     def _on_toggle(self):
         # Update the model object
@@ -174,7 +175,7 @@ class ValveControlWidget(ttk.Frame):
         Updates the status label color and text based on physical flow.
         """
         if self.valve.is_physically_open:
-            self.lbl_status.config(text="OPEN (Flow)", bg="#4CAF50", fg="white") # Green
+            self.lbl_status.config(text="OPEN", bg="#4CAF50", fg="white") # Green
         else:
             self.lbl_status.config(text="CLOSED", bg="#F44336", fg="white") # Red
 
@@ -184,6 +185,99 @@ class ValveControlWidget(ttk.Frame):
         """
         self.tk_energize_var.set(self.valve.is_energized)
         self._update_status_display()
+
+class PressureGauge(tk.Canvas):
+    """
+    A visual pressure gauge widget using Pillow for high-quality super-sampled rendering.
+    """
+    def __init__(self, parent, min_val, max_val, title, size=160, **kwargs):
+        super().__init__(parent, width=size, height=size, bg="white", highlightthickness=0, **kwargs)
+        self.min_val = min_val
+        self.max_val = max_val
+        self.title_text = title
+        self.size = size
+        self.cx = size / 2
+        self.cy = size / 2
+        self.current_val = min_val
+        
+        # Pre-render the static dial face (background)
+        self._create_face_image()
+        
+        # Create canvas item for the gauge image
+        self.img_item = self.create_image(0, 0, anchor="nw")
+        
+        # Overlay Text (Crisper when drawn natively by Tkinter on top)
+        self.create_text(self.cx, self.cy + 30, text=self.title_text, font=("Helvetica", 9, "bold"), fill="#555")
+        self.text_val = self.create_text(self.cx, self.cy + 50, text=str(min_val), font=("Helvetica", 16, "bold"), fill="black")
+        
+        self.set_value(min_val)
+
+    def _create_face_image(self):
+        """Generates the static background using super-sampling for smoothness."""
+        scale = 4
+        s_size = self.size * scale
+        
+        img = Image.new("RGBA", (s_size, s_size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        
+        # 1. White Face with Black Border
+        margin = 2 * scale
+        draw.ellipse([margin, margin, s_size-margin, s_size-margin], fill="white", outline="black", width=3*scale)
+        
+        # 2. Colored Arcs (PIL angles: 0 is 3 o'clock, clockwise)
+        # We map the 270 deg span: SW (135 deg) to SE (405 deg)
+        rect = [margin + 10*scale, margin + 10*scale, s_size - margin - 10*scale, s_size - margin - 10*scale]
+        width_px = 12 * scale
+        
+        # Green (0-70%): 135 to 324 (189 deg span)
+        draw.arc(rect, start=135, end=324, fill="#4CAF50", width=width_px)
+        # Yellow (70-90%): 324 to 378 (54 deg span)
+        draw.arc(rect, start=324, end=378, fill="#FFC107", width=width_px)
+        # Red (90-100%): 378 to 405 (27 deg span)
+        draw.arc(rect, start=378, end=405, fill="#F44336", width=width_px)
+        
+        self.base_image = img
+
+    def set_value(self, val):
+        """Updates the needle position and text readout."""
+        self.current_val = max(self.min_val, min(val, self.max_val))
+        
+        # Update text
+        self.itemconfig(self.text_val, text=f"{int(self.current_val)}")
+        
+        # Create composition for needle
+        img = self.base_image.copy()
+        draw = ImageDraw.Draw(img)
+        
+        scale = 4
+        s_size = self.size * scale
+        cx, cy = s_size / 2, s_size / 2
+        
+        # Calculate angle
+        # 0 value = 225 degrees (SW), Max value = -45 degrees (SE)
+        pct = (self.current_val - self.min_val) / (self.max_val - self.min_val)
+        angle_deg = 225 - (pct * 270)
+        angle_rad = math.radians(angle_deg)
+        
+        # Needle Geometry
+        tip_r = (self.size / 2 - 15) * scale
+        tip_x = cx + tip_r * math.cos(angle_rad)
+        tip_y = cy - tip_r * math.sin(angle_rad) # Canvas Y is inverted relative to standard math
+        
+        # Draw Needle
+        draw.line([cx, cy, tip_x, tip_y], fill="black", width=4*scale)
+        # Hub
+        hub_r = 6 * scale
+        draw.ellipse([cx-hub_r, cy-hub_r, cx+hub_r, cy+hub_r], fill="black")
+        
+        # Resize with LANCZOS for quality
+        if hasattr(Image, "Resampling"):
+            resample = Image.Resampling.LANCZOS
+        else:
+            resample = Image.LANCZOS
+            
+        self.tk_image = ImageTk.PhotoImage(img.resize((self.size, self.size), resample))
+        self.itemconfig(self.img_item, image=self.tk_image)
 
 class FlowDiagram(tk.Canvas):
     """
@@ -204,6 +298,13 @@ class FlowDiagram(tk.Canvas):
         
         # Generate Valve Assets (PIL Images)
         self._create_valve_images()
+        # Generate Compressor Asset
+        self._create_compressor_image()
+        
+        # Initialize Pressure Gauges
+        self.gauge_inlet = PressureGauge(self, 0, 5000, "INLET PSI")
+        self.gauge_chamber = PressureGauge(self, 0, 30000, "CHAMBER PSI")
+        self.gauge_bottle = PressureGauge(self, 0, 5000, "BOTTLE PSI")
 
         self.draw_layout()
         self.update_flow()
@@ -221,7 +322,7 @@ class FlowDiagram(tk.Canvas):
 
         # Colors for the new design
         VALVE_BODY_COLOR = "#B0BEC5"  # Blue Grey
-        VALVE_BORDER_COLOR = "#546E7A" # Darker Blue Grey
+        VALVE_BORDER_COLOR = "black"   # Black border
         OPEN_INDICATOR_COLOR = "#66BB6A" # Green
         CLOSED_INDICATOR_COLOR = "#EF5350" # Red
 
@@ -271,6 +372,84 @@ class FlowDiagram(tk.Canvas):
         # 2. Open Image (Black Arrow <->)
         self.img_open_pil = create_valve_icon(state='open')
         self.tk_img_open = ImageTk.PhotoImage(self.img_open_pil)
+
+    def _create_compressor_image(self):
+        """Generates a refined icon of the compressor to show a reciprocating system."""
+        # Target size (Width x Height)
+        target_w, target_h = 160, 100
+        scale = 4  # Super-sample for smoothness
+        w, h = target_w * scale, target_h * scale
+
+        img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+
+        # Colors harmonized with the rest of the diagram
+        COLOR_BLUE = "#1565C0"
+        COLOR_DARK_BLUE = "#0D47A1"
+        COLOR_METAL = "#B0BEC5"      # Same as valve body
+        COLOR_DARK_METAL = "#78909C"
+        COLOR_SKID = "#455A64"
+
+        # 1. Skid Base
+        skid_h = 12 * scale
+        draw.rectangle([10*scale, h - skid_h, w - 10*scale, h], fill=COLOR_SKID)
+
+        # Define component dimensions
+        head_w = 35 * scale
+        head_h = 70 * scale
+        head_y = h - skid_h - head_h
+
+        center_w = 50 * scale
+        center_h = 50 * scale
+        center_x = (w - center_w) // 2
+        center_y = h - skid_h - center_h
+
+        # 2. Connecting Rod Housings (drawn first to appear behind main components)
+        rod_h = 40 * scale  # Shorter than crankcase
+        rod_y = center_y + (center_h - rod_h) / 2  # Vertically centered with crankcase
+
+        # Left housing - fills the gap between head and center
+        draw.rectangle(
+            [15*scale + head_w, rod_y, center_x, rod_y + rod_h],
+            fill=COLOR_METAL, outline=COLOR_DARK_METAL, width=1*scale
+        )
+        # Right housing - fills the gap
+        draw.rectangle(
+            [center_x + center_w, rod_y, w - 15*scale - head_w, rod_y + rod_h],
+            fill=COLOR_METAL, outline=COLOR_DARK_METAL, width=1*scale
+        )
+
+        # 3. Main Cylinders (drawn on top of housing edges)
+        # Left Head
+        draw.rounded_rectangle(
+            [15*scale, head_y, 15*scale + head_w, head_y + head_h],
+            radius=4*scale, fill=COLOR_BLUE, outline=COLOR_DARK_BLUE, width=2*scale
+        )
+        draw.rounded_rectangle(
+            [w - 15*scale - head_w, head_y, w - 15*scale, head_y + head_h],
+            radius=4*scale, fill=COLOR_BLUE, outline=COLOR_DARK_BLUE, width=2*scale
+        )
+
+        # 4. Central Crankcase/Motor (drawn on top of housing edges)
+        draw.rectangle(
+            [center_x, center_y, center_x + center_w, center_y + center_h],
+            fill=COLOR_DARK_BLUE, outline="black", width=2*scale
+        )
+
+        # 5. Top Overhead Pipe (Cooler/Bypass)
+        top_pipe_y = head_y - 15 * scale
+        draw.rectangle([center_x + 10*scale, top_pipe_y, center_x + center_w - 10*scale, top_pipe_y + 8*scale], fill=COLOR_METAL)
+        draw.rectangle([center_x + 10*scale, top_pipe_y, center_x + 15*scale, center_y], fill=COLOR_METAL) # Left Riser
+        draw.rectangle([center_x + center_w - 15*scale, top_pipe_y, center_x + center_w - 10*scale, center_y], fill=COLOR_METAL) # Right Riser
+
+        # Resize with LANCZOS
+        if hasattr(Image, "Resampling"):
+            resample_mode = Image.Resampling.LANCZOS
+        else:
+            resample_mode = Image.LANCZOS
+
+        self.img_comp_pil = img.resize((target_w, target_h), resample_mode)
+        self.tk_img_comp = ImageTk.PhotoImage(self.img_comp_pil)
 
     def draw_layout(self):
         """Draws the static text and pipes (tags will be used to update colors)"""
@@ -323,8 +502,9 @@ class FlowDiagram(tk.Canvas):
         self.create_text(start[0], start[1]-30, text="Gas Bottle IN", font=FONT_LBL)
         self.create_text(chamber_pos[0], chamber_pos[1]-30, text="Loading\nChamber", font=FONT_LBL, justify="center")
         self.create_text(bottle_pos[0], bottle_pos[1]+40, text="Lecture\nBottle", font=FONT_LBL, justify="center")
-        self.create_text(comp_pos[0], comp_pos[1]+30, text="Compressor\nIN", font=FONT_LBL, justify="center")
-        self.create_text(comp_out_pos[0], comp_out_pos[1]+30, text="Compressor\nOUT", font=FONT_LBL, justify="center")
+        # Moved labels down (+65) to accommodate the new compressor image
+        self.create_text(comp_pos[0], comp_pos[1]+65, text="Compressor\nIN", font=FONT_LBL, justify="center")
+        self.create_text(comp_out_pos[0], comp_out_pos[1]+65, text="Compressor\nOUT", font=FONT_LBL, justify="center")
         self.create_text(exhaust_pos[0], exhaust_pos[1]+30, text="Exhaust", font=FONT_LBL)
 
         # --- Draw Pipes (Grouped by Nodes) ---
@@ -356,6 +536,16 @@ class FlowDiagram(tk.Canvas):
         
         # Node 5: Exhaust (After V6)
         self.create_line(v6_pos, exhaust_pos, tags="valv_6", **line_opts)
+
+        # --- Draw Equipment ---
+        # Center the compressor image between the IN and OUT nodes
+        comp_mid_x = (comp_pos[0] + comp_out_pos[0]) / 2
+        self.create_image(comp_mid_x, comp_pos[1], image=self.tk_img_comp, tags="compressor")
+        
+        # --- Place Gauges (Window Objects) ---
+        self.create_window(start[0] - 80, start[1], window=self.gauge_inlet, anchor="e")
+        self.create_window(chamber_pos[0], chamber_pos[1] - 100, window=self.gauge_chamber, anchor="s")
+        self.create_window(bottle_pos[0], bottle_pos[1] + 90, window=self.gauge_bottle, anchor="n")
 
         # --- Draw Valves (Overlay) ---
         valve_coords = [
@@ -413,7 +603,7 @@ class GasLoadingApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Gas Loading System Control")
-        self.geometry("1200x750")
+        self.geometry("1600x900")
         
         # Main Title
         header = ttk.Label(self, text="Gas Loading System Control", font=("Helvetica", 16, "bold"))
