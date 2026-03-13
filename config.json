@@ -1,0 +1,22 @@
+{
+    "chamber_pressure_limit": 23000,
+    "bottle_pressure_limit": 4800,
+    "relay_assignments": {
+        "Valve 1 (Main Inlet)": 1,
+        "Valve 2 (Branch A)": 2,
+        "Valve 3 (Branch B)": 3,
+        "Valve 4 (Chamber Line)": 4,
+        "Valve 5 (Bottle Line)": 5,
+        "Valve 6 (Exhaust)": 6,
+        "Compressor": 8,
+        "Vacuum Pump": 10,
+        "Motor CW": 9,
+        "Motor CCW": 10
+    },
+    "sensor_assignments": {
+        "Inlet Pressure": 0,
+        "Chamber Pressure": 1,
+        "Lecture Bottle Pressure": 2,
+        "Air Drive Pressure": 3
+    }
+}

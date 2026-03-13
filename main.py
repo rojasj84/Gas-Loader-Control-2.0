@@ -1,7 +1,9 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from PIL import Image, ImageDraw, ImageTk
 import math
+import json
+import os
 
 # Constants for Valve Types
 TYPE_NORMALLY_OPEN = "Normally Open"
@@ -91,6 +93,12 @@ class DeviceControlWidget(ttk.Frame):
         self.lbl_status.bind("<Button-1>", lambda e: self._on_toggle())
 
     def _on_toggle(self):
+        # Safety: Ignore clicks if currently in cool-down (debounce)
+        if getattr(self, "_debounce", False):
+            return
+        self._debounce = True
+        self.after(500, lambda: setattr(self, "_debounce", False))
+
         self.device.is_on = not self.device.is_on
         self._update_status_display()
 
@@ -141,6 +149,12 @@ class ValveControlWidget(ttk.Frame):
         self.lbl_status.bind("<Button-1>", lambda e: self._on_toggle())
 
     def _on_toggle(self):
+        # Safety: Ignore clicks if currently in cool-down (debounce)
+        if getattr(self, "_debounce", False):
+            return
+        self._debounce = True
+        self.after(500, lambda: setattr(self, "_debounce", False))
+
         # Update the model object
         self.valve.is_energized = not self.valve.is_energized
         
@@ -171,7 +185,7 @@ class PressureGauge(tk.Canvas):
     A visual pressure gauge widget using Pillow for high-quality super-sampled rendering.
     """
     def __init__(self, parent, min_val, max_val, title, size=160, **kwargs):
-        super().__init__(parent, width=size, height=size, bg="#2b2b2b", highlightthickness=0, **kwargs)
+        super().__init__(parent, width=size, height=size + 40, bg="#2b2b2b", highlightthickness=0, **kwargs)
         self.min_val = min_val
         self.max_val = max_val
         self.title_text = title
@@ -187,8 +201,8 @@ class PressureGauge(tk.Canvas):
         self.img_item = self.create_image(0, 0, anchor="nw")
         
         # Overlay Text (Crisper when drawn natively by Tkinter on top)
-        self.create_text(self.cx, self.cy + 30, text=self.title_text, font=("Helvetica", 9, "bold"), fill="#b0b0b0")
-        self.text_val = self.create_text(self.cx, self.cy + 50, text=str(min_val), font=("Helvetica", 16, "bold"), fill="white")
+        self.create_text(self.cx, self.cy + 40, text=self.title_text, font=("Helvetica", 9, "bold"), fill="#b0b0b0")
+        self.text_val = self.create_text(self.cx, self.size + 20, text=str(min_val), font=("Helvetica", 16, "bold"), fill="white")
         
         self.set_value(min_val)
 
@@ -266,7 +280,7 @@ class FlowDiagram(tk.Canvas):
     Red = No Flow
     """
     def __init__(self, parent, valves, on_valve_click=None):
-        super().__init__(parent, bg="#2b2b2b", width=950, height=720, highlightthickness=0)
+        super().__init__(parent, bg="#2b2b2b", width=1200, height=720, highlightthickness=0)
         self.valves = valves  # List of 6 PneumaticValve objects
         self.on_valve_click = on_valve_click
         self.valve_positions = [] # Store coordinates for updates
@@ -436,9 +450,9 @@ class FlowDiagram(tk.Canvas):
         self.delete("all")
         
         # Scaling factors
-        SCALE = 1.2
+        SCALE = 1.5
         X_OFF = 220
-        Y_OFF = 100
+        Y_OFF = 50
         
         # Define Coordinates for nodes (Scaled up)
         start       = (X_OFF + 50*SCALE,  Y_OFF + 200*SCALE)
@@ -523,9 +537,10 @@ class FlowDiagram(tk.Canvas):
         self.create_image(comp_mid_x, comp_pos[1], image=self.tk_img_comp, tags="compressor")
         
         # --- Place Gauges (Window Objects) ---
-        self.create_window(start[0] - 60, start[1], window=self.gauge_inlet, anchor="e")
-        self.create_window(chamber_pos[0] + 160, chamber_pos[1] + 20, window=self.gauge_chamber, anchor="w")
-        self.create_window(bottle_pos[0] + 160, bottle_pos[1] - 20, window=self.gauge_bottle, anchor="w")
+        self.create_window(start[0] - 60, start[1] + 20, window=self.gauge_inlet, anchor="e")
+        # Reposition gauges to the right of the merge line to avoid overlaps
+        self.create_window(merge_top[0] + 40, chamber_pos[1], window=self.gauge_chamber, anchor="w")
+        self.create_window(merge_btm[0] + 40, bottle_pos[1], window=self.gauge_bottle, anchor="w")
 
         # --- Draw Valves (Overlay) ---
         valve_coords = [
@@ -549,6 +564,12 @@ class FlowDiagram(tk.Canvas):
             self.tag_bind(tag_id, "<Button-1>", lambda event, idx=i: self._on_valve_click_handler(idx))
 
     def _on_valve_click_handler(self, index):
+        # Safety: Ignore clicks if currently in cool-down (debounce)
+        if getattr(self, "_debounce", False):
+            return
+        self._debounce = True
+        self.after(500, lambda: setattr(self, "_debounce", False))
+
         valve = self.valves[index]
         # Toggle logic: Assuming user wants to flip the physical state.
         # Since logic is: Energize -> toggle physical, we toggle energized.
@@ -579,11 +600,255 @@ class FlowDiagram(tk.Canvas):
             else:
                 self.itemconfig(img_tag, image=self.tk_img_closed)
 
+class SafetyConfigWindow(tk.Toplevel):
+    """
+    A popup window for configuring overpressure safety limits.
+    """
+    CHAMBER_ABS_MAX = 25000
+    BOTTLE_ABS_MAX = 5000
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent # parent is the GasLoadingApp instance
+
+        self.title("Overpressure Safety")
+        self.transient(parent)
+        self.grab_set() # Modal behavior
+        self.resizable(False, False)
+
+        # Use parent's style for dark mode consistency
+        style = ttk.Style(self)
+        style.theme_use('clam')
+        BG_COLOR = "#2b2b2b"
+        FG_COLOR = "white"
+        BORDER_COLOR = "#444444"
+        LIGHT_COLOR = "#3a3a3a"
+        DARK_COLOR = "#1c1c1c"
+        
+        self.configure(bg=BG_COLOR)
+        style.configure("TFrame", background=BG_COLOR, bordercolor=BORDER_COLOR, lightcolor=LIGHT_COLOR, darkcolor=DARK_COLOR)
+        style.configure("TLabel", background=BG_COLOR, foreground=FG_COLOR)
+        style.configure("TLabelframe", background=BG_COLOR, bordercolor=BORDER_COLOR, lightcolor=LIGHT_COLOR, darkcolor=DARK_COLOR)
+        style.configure("TLabelframe.Label", background=BG_COLOR, foreground=FG_COLOR)
+        style.configure("TButton", background=BG_COLOR, foreground=FG_COLOR, bordercolor=BORDER_COLOR, lightcolor=LIGHT_COLOR, darkcolor=DARK_COLOR)
+
+        main_frame = ttk.Frame(self, padding=20)
+        main_frame.pack(fill="both", expand=True)
+
+        # --- Data Variables ---
+        self.chamber_limit_var = tk.StringVar(value=str(self.parent.chamber_pressure_limit))
+        self.bottle_limit_var = tk.StringVar(value=str(self.parent.bottle_pressure_limit))
+
+        # --- Chamber Pressure Setting ---
+        chamber_frame = ttk.LabelFrame(main_frame, text="Chamber Pressure Limit", padding=10)
+        chamber_frame.pack(fill="x", pady=5)
+
+        ttk.Label(chamber_frame, text=f"(Absolute Max: {self.CHAMBER_ABS_MAX} PSI)").pack(anchor="w")
+        chamber_entry = ttk.Entry(chamber_frame, textvariable=self.chamber_limit_var, width=15, font=("Helvetica", 12))
+        chamber_entry.pack(pady=5, anchor="w")
+
+        # --- Bottle Pressure Setting ---
+        bottle_frame = ttk.LabelFrame(main_frame, text="Lecture Bottle Pressure Limit", padding=10)
+        bottle_frame.pack(fill="x", pady=5)
+
+        ttk.Label(bottle_frame, text=f"(Absolute Max: {self.BOTTLE_ABS_MAX} PSI)").pack(anchor="w")
+        bottle_entry = ttk.Entry(bottle_frame, textvariable=self.bottle_limit_var, width=15, font=("Helvetica", 12))
+        bottle_entry.pack(pady=5, anchor="w")
+
+        # --- Buttons ---
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill="x", pady=(20, 0))
+
+        save_btn = ttk.Button(btn_frame, text="Save", command=self._on_save)
+        save_btn.pack(side="right", padx=5)
+
+        cancel_btn = ttk.Button(btn_frame, text="Cancel", command=self.destroy)
+        cancel_btn.pack(side="right")
+
+    def _on_save(self):
+        try:
+            chamber_val = int(self.chamber_limit_var.get())
+            if not (0 < chamber_val <= self.CHAMBER_ABS_MAX):
+                messagebox.showerror("Invalid Value", f"Chamber pressure must be between 1 and {self.CHAMBER_ABS_MAX}.", parent=self)
+                return
+
+            bottle_val = int(self.bottle_limit_var.get())
+            if not (0 < bottle_val <= self.BOTTLE_ABS_MAX):
+                messagebox.showerror("Invalid Value", f"Bottle pressure must be between 1 and {self.BOTTLE_ABS_MAX}.", parent=self)
+                return
+
+            self.parent.chamber_pressure_limit = chamber_val
+            self.parent.bottle_pressure_limit = bottle_val
+            self.parent.save_config()
+            self.destroy()
+        except ValueError:
+            messagebox.showerror("Invalid Input", "Please enter valid integer numbers for pressure limits.", parent=self)
+
+class RelayConfigWindow(tk.Toplevel):
+    """
+    A popup window to map software devices to physical Denkovi Relay IDs.
+    """
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.title("Relay Assignment")
+        self.geometry("500x600")
+        self.transient(parent)
+        self.grab_set()
+        
+        # Theme Setup
+        style = ttk.Style(self)
+        style.theme_use('clam')
+        BG_COLOR = "#2b2b2b"
+        FG_COLOR = "white"
+        self.configure(bg=BG_COLOR)
+        
+        # Header
+        lbl_header = ttk.Label(self, text="Map Devices to Relay Board (1-16)", font=("Helvetica", 14, "bold"))
+        lbl_header.pack(pady=15)
+
+        # Scrollable Frame for entries
+        container = ttk.Frame(self)
+        container.pack(fill="both", expand=True, padx=20, pady=5)
+        
+        self.combos = {} # {device_name: Combobox}
+
+        # Collect all configurable devices
+        # 1. Valves
+        devices = [v.name for v in self.parent.valves]
+        # 2. Compressor
+        devices.append(self.parent.comp_device.name)
+        # 3. Other Equipment
+        devices.extend([d.name for d in self.parent.equipment_devices])
+
+        # Relay Options: None + 1..16
+        options = ["None"] + [str(i) for i in range(1, 17)]
+
+        for dev_name in devices:
+            row = ttk.Frame(container)
+            row.pack(fill="x", pady=5)
+            
+            lbl = ttk.Label(row, text=dev_name, width=30, anchor="w")
+            lbl.pack(side="left")
+            
+            current_relay = self.parent.relay_assignments.get(dev_name, "None")
+            
+            cb = ttk.Combobox(row, values=options, state="readonly", width=10)
+            cb.set(current_relay)
+            cb.pack(side="right")
+            
+            self.combos[dev_name] = cb
+
+        # Save Button
+        btn_save = ttk.Button(self, text="Save Assignments", command=self._on_save)
+        btn_save.pack(pady=20)
+
+    def _on_save(self):
+        # Update parent assignments
+        for dev_name, cb in self.combos.items():
+            val = cb.get()
+            if val == "None":
+                if dev_name in self.parent.relay_assignments:
+                    del self.parent.relay_assignments[dev_name]
+            else:
+                self.parent.relay_assignments[dev_name] = int(val)
+        
+        self.parent.save_config()
+        self.destroy()
+
+class SensorConfigWindow(tk.Toplevel):
+    """
+    A popup window to map pressure sensors to NI USB-6001 Analog Input channels.
+    """
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.title("Sensor Assignment")
+        self.geometry("450x450")
+        self.transient(parent)
+        self.grab_set()
+
+        # Theme Setup
+        style = ttk.Style(self)
+        style.theme_use('clam')
+        BG_COLOR = "#2b2b2b"
+        self.configure(bg=BG_COLOR)
+
+        # Header
+        lbl_header = ttk.Label(self, text="Map Sensors to Differential Pairs", font=("Helvetica", 12, "bold"))
+        lbl_header.pack(pady=15)
+
+        container = ttk.Frame(self)
+        container.pack(fill="both", expand=True, padx=20, pady=5)
+
+        self.combos = {}
+        
+        # Sensor Names defined in requirements
+        sensors = [
+            "Inlet Pressure",
+            "Chamber Pressure",
+            "Lecture Bottle Pressure",
+            "Air Drive Pressure"
+        ]
+        
+        # Differential Pair Mapping for NI USB-6001
+        self.diff_map = {
+            0: "ai0 (+) & ai4 (-)",
+            1: "ai1 (+) & ai5 (-)",
+            2: "ai2 (+) & ai6 (-)",
+            3: "ai3 (+) & ai7 (-)"
+        }
+        options = ["None"] + list(self.diff_map.values())
+
+        for sensor_name in sensors:
+            row = ttk.Frame(container)
+            row.pack(fill="x", pady=5)
+            
+            lbl = ttk.Label(row, text=sensor_name, width=25, anchor="w")
+            lbl.pack(side="left")
+            
+            # Retrieve current setting and convert to Pair String
+            current_int = self.parent.sensor_assignments.get(sensor_name, None)
+            current_val = "None"
+            if current_int is not None and current_int in self.diff_map:
+                current_val = self.diff_map[current_int]
+            
+            cb = ttk.Combobox(row, values=options, state="readonly", width=10)
+            cb.set(current_val)
+            cb.pack(side="right")
+            
+            self.combos[sensor_name] = cb
+
+        # Save Button
+        btn_save = ttk.Button(self, text="Save Assignments", command=self._on_save)
+        btn_save.pack(pady=20)
+
+    def _on_save(self):
+        for name, cb in self.combos.items():
+            val = cb.get()
+            if val == "None":
+                if name in self.parent.sensor_assignments:
+                    del self.parent.sensor_assignments[name]
+            else:
+                # Reverse lookup the integer index from the pair string
+                for k, v in self.diff_map.items():
+                    if v == val:
+                        self.parent.sensor_assignments[name] = k
+                        break
+        
+        self.parent.save_config()
+        self.destroy()
+
 class GasLoadingApp(tk.Tk):
+    CONFIG_FILE = "config.json"
+
     def __init__(self):
         super().__init__()
         self.title("Gas Loading System Control")
         self.geometry("1600x900")
+        
+        # --- Menu Bar Setup ---
+        self._setup_menu()
         
         # --- Dark Mode Theme Setup ---
         BG_COLOR = "#2b2b2b"
@@ -594,10 +859,17 @@ class GasLoadingApp(tk.Tk):
         style = ttk.Style(self)
         style.theme_use('clam') # 'clam' theme allows for easier color customization
         
-        style.configure("TFrame", background=BG_COLOR)
+        # Dark Mode Theme Configuration
+        BORDER_COLOR = "#444444"
+        LIGHT_COLOR = "#3a3a3a"
+        DARK_COLOR = "#1c1c1c"
+        
+        style.configure("TFrame", background=BG_COLOR, bordercolor=BORDER_COLOR, lightcolor=LIGHT_COLOR, darkcolor=DARK_COLOR)
         style.configure("TLabel", background=BG_COLOR, foreground=FG_COLOR)
         style.configure("TCheckbutton", background=BG_COLOR, foreground=FG_COLOR, indicatorcolor=BG_COLOR, activebackground=BG_COLOR, activeforeground=FG_COLOR)
-        style.configure("TButton", background=BG_COLOR, foreground=FG_COLOR)
+        style.configure("TButton", background=BG_COLOR, foreground=FG_COLOR, bordercolor=BORDER_COLOR, lightcolor=LIGHT_COLOR, darkcolor=DARK_COLOR)
+        style.configure("TLabelframe", background=BG_COLOR, bordercolor=BORDER_COLOR, lightcolor=LIGHT_COLOR, darkcolor=DARK_COLOR)
+        style.configure("TLabelframe.Label", background=BG_COLOR, foreground=FG_COLOR)
         
         # --- Header Section ---
         header_frame = ttk.Frame(self)
@@ -641,28 +913,55 @@ class GasLoadingApp(tk.Tk):
         right_panel.pack(side="left", fill="both", expand=True, padx=10)
 
         # --- Setup Left Panel (Controls) ---
-        valve_header = ttk.Label(left_panel, text="Pneumatic Valve Controls", font=("Helvetica", 12, "bold"))
-        valve_header.pack(pady=(10, 5))
+        # 1. Pneumatics Frame (Air Drive + Compressor + Valves)
+        self.pneu_frame = ttk.LabelFrame(left_panel, text="Pneumatics", padding=10)
+        self.pneu_frame.pack(fill="x", padx=10, pady=10)
 
-        self.valve_container = ttk.Frame(left_panel)
-        self.valve_container.pack(fill="x", expand=False, padx=20)
+        # Air Drive Display
+        self.frm_air_drive = ttk.Frame(self.pneu_frame, relief="groove", padding=5, borderwidth=1)
+        self.frm_air_drive.pack(fill="x", pady=(0, 10))
+        
+        ttk.Label(self.frm_air_drive, text="Air Drive System", font=("Helvetica", 11)).pack(side="left", padx=5)
+        self.lbl_air_drive = ttk.Label(self.frm_air_drive, text="0 PSI", font=("Helvetica", 11, "bold"), foreground="#29B6F6")
+        self.lbl_air_drive.pack(side="right", padx=5)
 
-        equip_header = ttk.Label(left_panel, text="Equipment Controls", font=("Helvetica", 12, "bold"))
-        equip_header.pack(pady=(20, 5))
+        # Compressor (Pneumatic Driven)
+        self.comp_device = ControllableDevice("Compressor")
+        self.comp_widget = DeviceControlWidget(self.pneu_frame, self.comp_device)
+        self.comp_widget.pack(fill="x", pady=5)
 
-        self.equipment_container = ttk.Frame(left_panel)
-        self.equipment_container.pack(fill="x", expand=False, padx=20)
+        # Valves
+        ttk.Label(self.pneu_frame, text="Valves", font=("Helvetica", 11, "bold")).pack(pady=(10, 5), anchor="w")
+        self.valve_container = ttk.Frame(self.pneu_frame)
+        self.valve_container.pack(fill="x", expand=False)
+
+        # 2. Electric Equipment Frame
+        self.equip_frame = ttk.LabelFrame(left_panel, text="Electric Equipment", padding=10)
+        self.equip_frame.pack(fill="x", padx=10, pady=10)
+
+        self.equipment_container = ttk.Frame(self.equip_frame)
+        self.equipment_container.pack(fill="x", expand=False)
 
         # --- Initialize System ---
         self.valves = []
         self.valve_widgets = [] # Keep track of widgets to sync them
+
+        # --- Safety Configuration (with defaults) ---
+        self.relay_assignments = {} # { "Device Name": RelayID_int }
+        self.sensor_assignments = {} # { "Sensor Name": Channel_int }
+        self.chamber_pressure_limit = 25000
+        self.bottle_pressure_limit = 5000
+        self.load_config()
+
         self.setup_system(right_panel)
         self.create_equipment()
 
     def create_equipment(self):
-        equipment_configs = ["Compressor", "Vacuum Pump"]
+        self.equipment_devices = []
+        equipment_configs = ["Vacuum Pump", "Motor CW", "Motor CCW"]
         for name in equipment_configs:
             device_obj = ControllableDevice(name)
+            self.equipment_devices.append(device_obj)
             row_widget = DeviceControlWidget(self.equipment_container, device_obj)
             row_widget.pack(fill="x", pady=5)
 
@@ -700,6 +999,60 @@ class GasLoadingApp(tk.Tk):
         """Called when diagram is clicked; updates checkboxes to match."""
         for widget in self.valve_widgets:
             widget.refresh_from_model()
+
+    def load_config(self):
+        """Loads user settings from JSON file."""
+        if not os.path.exists(self.CONFIG_FILE):
+            return
+
+        try:
+            with open(self.CONFIG_FILE, "r") as f:
+                data = json.load(f)
+                self.chamber_pressure_limit = data.get("chamber_pressure_limit", 25000)
+                self.bottle_pressure_limit = data.get("bottle_pressure_limit", 5000)
+                self.relay_assignments = data.get("relay_assignments", {})
+                self.sensor_assignments = data.get("sensor_assignments", {})
+        except Exception as e:
+            print(f"Error loading configuration: {e}")
+
+    def save_config(self):
+        """Saves current settings to JSON file."""
+        data = {
+            "chamber_pressure_limit": self.chamber_pressure_limit,
+            "bottle_pressure_limit": self.bottle_pressure_limit,
+            "relay_assignments": self.relay_assignments,
+            "sensor_assignments": self.sensor_assignments
+        }
+        try:
+            with open(self.CONFIG_FILE, "w") as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            messagebox.showerror("Configuration Error", f"Failed to save settings: {e}")
+
+    def _setup_menu(self):
+        menubar = tk.Menu(self)
+        self.config(menu=menubar)
+
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="File", menu=file_menu)
+        file_menu.add_command(label="Exit", command=self.quit)
+
+        config_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Configuration", menu=config_menu)
+
+        config_menu.add_command(label="Overpressure Safety", command=self._open_safety_config)
+        config_menu.add_command(label="Relay Assignment", command=self._open_relay_config)
+        config_menu.add_command(label="Sensor Assignment", command=self._open_sensor_config)
+
+    def _open_safety_config(self):
+        config_window = SafetyConfigWindow(self)
+        config_window.wait_window() # Wait until the config window is closed
+
+    def _open_relay_config(self):
+        RelayConfigWindow(self)
+
+    def _open_sensor_config(self):
+        SensorConfigWindow(self)
 
 if __name__ == "__main__":
     app = GasLoadingApp()
